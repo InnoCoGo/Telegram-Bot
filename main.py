@@ -67,4 +67,4 @@ def backend_endpoint():
 
 if __name__ == '__main__':
     load_dotenv()
-    app.run(host='0.0.0.0', port=8000)
+    app.run(debug=True, host='0.0.0.0', ssl_context='adhoc')
