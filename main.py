@@ -67,4 +67,4 @@ def backend_endpoint():
 
 if __name__ == '__main__':
     load_dotenv()
-    app.run(debug=True, host='0.0.0.0', ssl_context=(os.getenv("CERT_FILE"), os.getenv("PKEY_FILE")))
+    app.run(debug=True, host=os.getenv("HOST"), port=int(os.getenv("PORT")), ssl_context=(os.getenv("CERT_FILE"), os.getenv("PKEY_FILE")))
