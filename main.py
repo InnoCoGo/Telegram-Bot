@@ -38,7 +38,7 @@ def tg_send_message(chat_id, text):
 
 
 def handle_tg_update(chat_id, text):
-    tg_send_message(chat_id, f"(v2) You said: '{text}'. The last backend endpoint request said: '{backend_variable}'")
+    tg_send_message(chat_id, f"(v3) You said: '{text}'. The last backend endpoint request said: '{backend_variable}'")
 
 
 @app.route('/telegram_endpoint', methods=['POST'])
