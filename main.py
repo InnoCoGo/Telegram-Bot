@@ -73,12 +73,25 @@ def backend_endpoint():
     return Response('ok', status=200)
 
 
-if __name__ == '__main__':
+def run():
     load_dotenv()
-    app.run(debug=True,
-            host=os.getenv("HOST"),
-            port=int(os.getenv("PORT")),
-            ssl_context=(os.getenv("CERT_FILE"),
-                         os.getenv("PKEY_FILE")
-                         )
-            )
+    cert, pkey = (os.getenv("CERT_FILE"),
+                  os.getenv("PKEY_FILE")
+                  )
+    if (cert is None) or (pkey is None):
+        print("Running without Https in DEBUG mode...")
+        app.run(debug=True,
+                host=os.getenv("HOST"),
+                port=int(os.getenv("PORT"))
+                )
+    else:
+        print("Running with Https (no DEBUG mode)...")
+        app.run(debug=False,
+                host=os.getenv("HOST"),
+                port=int(os.getenv("PORT")),
+                ssl_context=(cert, pkey)
+                )
+
+
+if __name__ == '__main__':
+    run()
