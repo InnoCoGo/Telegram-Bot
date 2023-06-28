@@ -15,6 +15,10 @@ def get_tg_token() -> str:
     return os.getenv("TG_BOT_TOKEN")
 
 
+def get_tg_secret_token() -> str:
+    return os.getenv("TG_SECRET_TOKEN")
+
+
 def parse_message(message) -> None | Tuple[str, str]:
     try:
         print("message-->", message)
@@ -43,13 +47,17 @@ def handle_tg_update(chat_id, text):
 
 @app.route('/telegram_endpoint', methods=['POST'])
 def telegram_endpoint():
-    msg = request.get_json()
+    token_received = request.headers.get('X-Telegram-Bot-Api-Secret-Token', 'no-key')
+    if get_tg_secret_token() != token_received:
+        print(f"Unauthorized! Tried to access with token {token_received}'")
+        return Response(status=403)
 
+    msg = request.get_json()
     parsed_message = parse_message(msg)
     if parsed_message is None:
         # Some kind of unhandled message came our way: we lie to Telegram, saying that we handled it
         return Response('ok', status=200)
-    chat_id,text = parsed_message
+    chat_id, text = parsed_message
     handle_tg_update(chat_id, text)
 
     return Response('ok', status=200)
@@ -67,4 +75,10 @@ def backend_endpoint():
 
 if __name__ == '__main__':
     load_dotenv()
-    app.run(debug=True, host=os.getenv("HOST"), port=int(os.getenv("PORT")), ssl_context=(os.getenv("CERT_FILE"), os.getenv("PKEY_FILE")))
+    app.run(debug=True,
+            host=os.getenv("HOST"),
+            port=int(os.getenv("PORT")),
+            ssl_context=(os.getenv("CERT_FILE"),
+                         os.getenv("PKEY_FILE")
+                         )
+            )
