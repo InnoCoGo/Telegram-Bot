@@ -14,10 +14,8 @@ on:
     branches:
       - main
 
-
-
 jobs:
-  push_to_registry:
+  build_and_push:
     name: Push Docker image to Docker Hub
     runs-on: ubuntu-latest
     steps:
@@ -42,6 +40,27 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags:  ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+  deploy:
+    needs: build_and_push
+    runs-on: ${{ fromJSON('["ubuntu-latest", "self-hosted"]')[github.repository == 'github/docs-internal'] }}
+
+    steps:
+      - name: Pulling from rented server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSHKEY }} 
+
+          script: |
+
+            cd innocotravel
+            
+            docker compose -f docker-compose.yml down -v
+            docker compose stop
+            docker compose rm -f
+            docker compose pull
+            docker compose up -d
