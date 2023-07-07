@@ -161,7 +161,7 @@ def actualize_and_get_user(update: TelegramUpdate) -> User:
     else:
         # User doesn't exist, insert a new row
         cursor.execute("INSERT INTO UserInfo (Username, Id, PendingTripRequests) VALUES (?, ?, ?)",
-                       (update.user_id, update.user_id, "[]"))
+                       (update.username, update.user_id, "[]"))
     cursor.close()
     connection.commit()
     connection.close()
