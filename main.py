@@ -307,15 +307,14 @@ def telegram_endpoint():
 
     logging.info(f"Telegram endpoint request json is '{request.get_json()}'")
     msg = request.get_json()
-    parsed_message = parse_message(msg)
-    if parsed_message is None:
-        # Some kind of unhandled message came our way: we lie to Telegram, saying that we handled it
-        return Response('ok', status=200)
+
     try:
+        parsed_message = parse_message(msg)
         handle_tg_update(parsed_message)
     except Exception as e:
         logging.error(e)
     finally:
+        # Some kind of unhandled message came our way: we lie to Telegram, saying that we handled it
         return Response('ok', status=200)
 
 
