@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -10,7 +11,24 @@ from flask import Flask
 from flask import Response
 from flask import request
 
-import logging
+messages = [
+    # English
+    {
+        'trip_ask': "requests to join the trip\\!",
+        'rejected': "rejected you for the trip\\.\\.\\.",
+        'accepted': "accepted you for the trip\\!",
+        'reject': "Reject",
+        'accept': "Accept"
+    },
+    # Russian
+    {
+        'trip_ask': "хотят принять участие в вашей поездке\\!",
+        'rejected': "отказались принимать вас\\.\\.\\.",
+        'accepted': "приняли вас\\!",
+        'reject': "Отказать",
+        'accept': "Принять"
+    }
+]
 
 
 def create_connection():
@@ -21,6 +39,7 @@ def create_connection():
 
     cur.execute('''CREATE TABLE IF NOT EXISTS UserInfo (
         Id INTEGER PRIMARY KEY,
+        LanguageCode TEXT,
         PendingTripRequests TEXT,
         Username TEXT
     )''')
@@ -33,11 +52,15 @@ def create_connection():
 
 
 class User:
-    def __init__(self, user_id, pending_trip_requests, username):
+    def get_language_index(self):
+        return 1 if self.language_code == 'ru' else 0
+
+    def __init__(self, user_id, language_code, pending_trip_requests, username):
         self.user_id: int = user_id
         self.username: str = username
+        self.language_code: str = language_code
 
-        # array of {trip_id:int, sender_id: int}
+        # array of {trip_id:int, sender_id: int, message_id: int}
         self.pending_trip_requests: list[dict[any]] = pending_trip_requests
 
     @staticmethod
@@ -51,10 +74,10 @@ class User:
         connection.close()
 
         if user_data:
-            user_id, pending_trip_requests, username = user_data
+            user_id, language_code, pending_trip_requests, username = user_data
             # Deserialize pending_trip_requests from JSON string to Python list
             pending_trip_requests = json.loads(pending_trip_requests)
-            return User(user_id, pending_trip_requests, username)
+            return User(user_id, language_code, pending_trip_requests, username)
         else:
             return None
 
@@ -65,8 +88,8 @@ class User:
         # Serialize pending_trip_requests from Python list to JSON string
         pending_trip_requests = json.dumps(self.pending_trip_requests)
 
-        cursor.execute("UPDATE UserInfo SET PendingTripRequests = ?, Username = ? WHERE Id = ?",
-                       (pending_trip_requests, self.username, self.user_id))
+        cursor.execute("UPDATE UserInfo SET PendingTripRequests = ?, LanguageCode = ?, Username = ? WHERE Id = ?",
+                       (pending_trip_requests, self.language_code, self.username, self.user_id))
 
         connection.commit()
         connection.close()
@@ -114,20 +137,21 @@ def get_persistent_folder() -> str:
 
 
 class TelegramUpdate:
-    def __init__(self, user_id, username):
+    def __init__(self, user_id, username, language_code):
         self.user_id = user_id
         self.username = username
+        self.language_code = language_code
 
 
 class TextMessageUpdate(TelegramUpdate):
-    def __init__(self, user_id, username, text):
-        super().__init__(user_id, username)
+    def __init__(self, user_id, username, text, language_code):
+        super().__init__(user_id, username, language_code)
         self.text = text
 
 
 class ButtonPressedUpdate(TelegramUpdate):
-    def __init__(self, user_id, username, data):
-        super().__init__(user_id, username)
+    def __init__(self, user_id, username, data, language_code):
+        super().__init__(user_id, username, language_code)
         self.data: str = data
 
 
@@ -136,14 +160,16 @@ def parse_message(message):
         # Type 1: Text message
         user_id = message['message']['from']['id']
         username = message['message']['from']['username']
+        langauge_code = message['message']['from']['language_code']
         text = message['message']['text']
-        return TextMessageUpdate(user_id, username, text)
+        return TextMessageUpdate(user_id, username, text, langauge_code)
     elif 'callback_query' in message:
         # Type 2: Button pressed
         user_id = message['callback_query']['from']['id']
         username = message['callback_query']['from']['username']
+        langauge_code = message['callback_query']['from']['language_code']
         data = message['callback_query']['data']
-        return ButtonPressedUpdate(user_id, username, data)
+        return ButtonPressedUpdate(user_id, username, data, langauge_code)
     return None
 
 
@@ -157,16 +183,31 @@ def actualize_and_get_user(update: TelegramUpdate) -> User:
 
     if existing_user:
         # User exists, update their information
-        cursor.execute("UPDATE UserInfo SET Username = ? WHERE Id = ?", (update.username, update.user_id))
+        cursor.execute("UPDATE UserInfo SET Username = ?, LanguageCode = ? WHERE Id = ?",
+                       (update.username, update.language_code, update.user_id))
     else:
         # User doesn't exist, insert a new row
-        cursor.execute("INSERT INTO UserInfo (Username, Id, PendingTripRequests) VALUES (?, ?, ?)",
-                       (update.username, update.user_id, "[]"))
+        cursor.execute("INSERT INTO UserInfo (Username, Id, PendingTripRequests, LanguageCode) VALUES (?, ?, ?, ?)",
+                       (update.username, update.user_id, "[]", update.language_code))
     cursor.close()
     connection.commit()
     connection.close()
 
     return User.get_user_by_id(update.user_id)
+
+
+def create_accepted_message(user_receiving_message: User, user_who_accepted: User, trip_id: int):
+    language_index = user_receiving_message.get_language_index()
+    # TODO: get info about trip from backend?
+    return f"[@{user_who_accepted.username}](https://t.me/{user_who_accepted.username}) " + \
+        messages[language_index]['accepted']
+
+
+def create_rejected_message(user_receiving_message: User, user_who_accepted: User, trip_id: int):
+    language_index = user_receiving_message.get_language_index()
+    # TODO: get info about trip from backend?
+    return f"[@{user_who_accepted.username}](https://t.me/{user_who_accepted.username}) " + \
+        messages[language_index]['rejected']
 
 
 def handle_tg_update(update):
@@ -190,13 +231,15 @@ def handle_tg_update(update):
             logging.error(
                 f"No matching requests found! tripId {trip_id}, sender_id {id_of_person_asking_to_join}, tripAdminId {answering_user.user_id}")
 
+        asking_user = User.get_user_by_id(id_of_person_asking_to_join)
         message_id = answering_user.pending_trip_requests[matching_pending_request_index]['message_id']
         answering_user.pending_trip_requests.pop(matching_pending_request_index)
         answering_user.write_back()
 
         tg_remove_message(answering_user.user_id, message_id)
         tg_send_message(id_of_person_asking_to_join,
-                        "You have been accepted" if answer == 'y' else "You have been rejected")
+                        create_accepted_message(asking_user, answering_user, trip_id) if answer == 'y'
+                        else create_rejected_message(asking_user, answering_user, trip_id))
 
 
 def tg_remove_message(chat_id, message_id):
@@ -211,21 +254,22 @@ def tg_remove_message(chat_id, message_id):
     logging.info(f"Response for tg_remove_message: '{response.text}'")
 
 
-def tg_send_join_request(chat_id, asker_username, data_to_imbue):
+def tg_send_join_request(chat_id, asker_username, data_to_imbue, language_index):
     url = f'https://api.telegram.org/bot{get_tg_token()}/sendMessage'
     payload = {
         'chat_id': chat_id,
-        'text': f"[@{asker_username}](https://t.me/{asker_username}) asks to join your trip",  # TODO: info about trip
+        'text': f"[@{asker_username}](https://t.me/{asker_username}) {messages[language_index]['trip_ask']}",
+        # TODO: info about trip
         "parse_mode": "MarkdownV2",
         "reply_markup": {
             "inline_keyboard": [
                 [
                     {
-                        "text": "Accept",
+                        "text": messages[language_index]['accept'],
                         "callback_data": f"y_{data_to_imbue}"
                     },
                     {
-                        "text": "Refuse",
+                        "text": messages[language_index]['reject'],
                         "callback_data": f"n_{data_to_imbue}"
                     }
                 ]
@@ -245,6 +289,8 @@ def tg_send_message(chat_id, text):
     payload = {
         'chat_id': chat_id,
         'text': text,
+        "parse_mode": "MarkdownV2",
+
     }
 
     response = requests.post(url, json=payload)
@@ -267,6 +313,8 @@ def telegram_endpoint():
         return Response('ok', status=200)
     try:
         handle_tg_update(parsed_message)
+    except Exception as e:
+        logging.error(e)
     finally:
         return Response('ok', status=200)
 
@@ -284,7 +332,8 @@ def backend_endpoint():
 
     message_id = \
         tg_send_join_request(user_to_send_to.user_id, sender.username,
-                             f"{backend_request.trip_id}_{backend_request.id_of_person_asking_to_join}")
+                             f"{backend_request.trip_id}_{backend_request.id_of_person_asking_to_join}",
+                             user_to_send_to.get_language_index())
 
     user_to_send_to.pending_trip_requests.append(
         {"trip_id": backend_request.trip_id,
