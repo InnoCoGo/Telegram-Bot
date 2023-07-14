@@ -14,19 +14,36 @@ from flask import request
 messages = [
     # English
     {
-        'trip_ask': "requests to join the trip\\!",
-        'rejected': "rejected you for the trip\\.\\.\\.",
-        'accepted': "accepted you for the trip\\!",
+        'trip_ask': "requests to join the trip",
+        'rejected': "rejected you for the trip",
+        'accepted': "accepted you for the trip",
         'reject': "Reject",
-        'accept': "Accept"
+        'accept': "Accept",
+        'in_message_at': "at"
     },
     # Russian
     {
-        'trip_ask': "хотят принять участие в вашей поездке\\!",
-        'rejected': "отказались принимать вас\\.\\.\\.",
-        'accepted': "приняли вас\\!",
+        'trip_ask': "хотят принять участие в вашей поездке",
+        'rejected': "отказались принимать вас в поездку",
+        'accepted': "приняли вас в поездку",
         'reject': "Отказать",
-        'accept': "Принять"
+        'accept': "Принять",
+        'in_message_at': "в"
+    }
+]
+
+destinations = [
+    # English
+    {
+        "0": "Innopolis",
+        "1": "Kazan",
+        "2": "Verkhniy Uslon"
+    },
+    # Russian
+    {
+        "0": "Иннополис",
+        "1": "Казань",
+        "2": "Верхний Услон"
     }
 ]
 
@@ -60,7 +77,7 @@ class User:
         self.username: str = username
         self.language_code: str = language_code
 
-        # array of {trip_id:int, sender_id: int, message_id: int}
+        # array of {trip_id:int, sender_id: int, message_id: int, raw_trip_desc: str}
         self.pending_trip_requests: list[dict[any]] = pending_trip_requests
 
     @staticmethod
@@ -101,19 +118,33 @@ class JoinRequest:
     secret_token: str
     trip_id: int
     id_of_person_asking_to_join: int
+    tg_id_of_person_asking_to_join: int
+    trip_name: str
 
     @staticmethod
     def from_dict(obj: Any) -> 'JoinRequest':
-        _tripAdminId = int(obj.get("trip_admin_id"))
+        _tripAdminId = int(obj.get("trip_admin_tg_id"))
         _secretToken = str(obj.get("secret_token"))
         _tripId = int(obj.get("trip_id"))
         _IdOfPersonAskingToJoin = int(obj.get("id_of_person_asking_to_join"))
-        return JoinRequest(_tripAdminId, _secretToken, _tripId, _IdOfPersonAskingToJoin)
+        return JoinRequest(_tripAdminId, _secretToken, _tripId, _IdOfPersonAskingToJoin,
+                           int(obj.get('tg_id_of_person_asking_to_join')), obj.get('trip_name'))
 
     @staticmethod
     def from_json_string(json_str: str) -> 'JoinRequest':
         json_obj = json.loads(json_str)
         return JoinRequest.from_dict(json_obj)
+
+
+def get_translated_trip_name(trip_name: str, langauge_index: int):
+    localized_trip_name = trip_name
+    localized_destinations = destinations[langauge_index]
+    num1 = trip_name[0]
+    num2 = trip_name[5]
+    localized_trip_name = localized_trip_name.replace(num1, localized_destinations[num1], 1) \
+        .replace(num2, localized_destinations[num2], 1)
+    return localized_trip_name.replace('at:', messages[langauge_index]['in_message_at'])\
+        .replace('-', '\\-').replace('>', '\\>').replace('.', '\\.')
 
 
 app: Flask = Flask(__name__)
@@ -130,6 +161,10 @@ def get_tg_secret_token() -> str:
 
 def get_backend_secret_token() -> str:
     return os.getenv("BACKEND_SECRET_TOKEN")
+
+
+def get_backend_url() -> str:
+    return os.getenv("BACKEND_URL")
 
 
 def get_persistent_folder() -> str:
@@ -196,30 +231,31 @@ def actualize_and_get_user(update: TelegramUpdate) -> User:
     return User.get_user_by_id(update.user_id)
 
 
-def create_accepted_message(user_receiving_message: User, user_who_accepted: User, trip_id: int):
+def create_accepted_message(user_receiving_message: User, user_who_accepted: User, trip_desc: str):
     language_index = user_receiving_message.get_language_index()
     # TODO: get info about trip from backend?
     return f"[@{user_who_accepted.username}](https://t.me/{user_who_accepted.username}) " + \
-        messages[language_index]['accepted']
+        messages[language_index]['accepted'] + " " + get_translated_trip_name(trip_desc, language_index)
 
 
-def create_rejected_message(user_receiving_message: User, user_who_accepted: User, trip_id: int):
+def create_rejected_message(user_receiving_message: User, user_who_accepted: User, trip_desc: str):
     language_index = user_receiving_message.get_language_index()
     # TODO: get info about trip from backend?
     return f"[@{user_who_accepted.username}](https://t.me/{user_who_accepted.username}) " + \
-        messages[language_index]['rejected']
+        messages[language_index]['rejected'] + " " + get_translated_trip_name(trip_desc, language_index)
 
 
 def handle_tg_update(update):
     if isinstance(update, TextMessageUpdate):
         # Probably the first message, "/start"
-        user = actualize_and_get_user(update)
+        actualize_and_get_user(update)
     elif isinstance(update, ButtonPressedUpdate):
         answering_user = actualize_and_get_user(update)
         answer_parts = update.data.split('_')
         answer = answer_parts[0]
         trip_id = int(answer_parts[1])
         id_of_person_asking_to_join = int(answer_parts[2])
+        internal_id_of_person_asking_to_join = int(answer_parts[3])
 
         matching_pending_request_index: int | None = None
         for i, request in enumerate(answering_user.pending_trip_requests, 0):
@@ -233,13 +269,27 @@ def handle_tg_update(update):
 
         asking_user = User.get_user_by_id(id_of_person_asking_to_join)
         message_id = answering_user.pending_trip_requests[matching_pending_request_index]['message_id']
+        raw_trip_desc = answering_user.pending_trip_requests[matching_pending_request_index]['raw_trip_desc']
         answering_user.pending_trip_requests.pop(matching_pending_request_index)
         answering_user.write_back()
 
         tg_remove_message(answering_user.user_id, message_id)
         tg_send_message(id_of_person_asking_to_join,
-                        create_accepted_message(asking_user, answering_user, trip_id) if answer == 'y'
-                        else create_rejected_message(asking_user, answering_user, trip_id))
+                        create_accepted_message(asking_user, answering_user, raw_trip_desc) if answer == 'y'
+                        else create_rejected_message(asking_user, answering_user, raw_trip_desc))
+
+        url = f'{get_backend_url()}/api/v1/user/join_trip/res'
+        payload = {
+            'trip_id': trip_id,
+            'id_of_person_asking_to_join': internal_id_of_person_asking_to_join,
+            'secret_token': get_backend_secret_token(),
+            'accepted': answer == 'y'
+        }
+        logging.info(f"Sending data to server: {payload}")
+
+        response = requests.post(url, json=payload)
+
+        logging.info(f"Response from server: '{response.text}'")
 
 
 def tg_remove_message(chat_id, message_id):
@@ -254,11 +304,11 @@ def tg_remove_message(chat_id, message_id):
     logging.info(f"Response for tg_remove_message: '{response.text}'")
 
 
-def tg_send_join_request(chat_id, asker_username, data_to_imbue, language_index):
+def tg_send_join_request(chat_id, asker_username, data_to_imbue, language_index, trip_desc: str):
     url = f'https://api.telegram.org/bot{get_tg_token()}/sendMessage'
     payload = {
         'chat_id': chat_id,
-        'text': f"[@{asker_username}](https://t.me/{asker_username}) {messages[language_index]['trip_ask']}",
+        'text': f"[@{asker_username}](https://t.me/{asker_username}) {messages[language_index]['trip_ask']} {get_translated_trip_name(trip_desc,language_index)}",
         # TODO: info about trip
         "parse_mode": "MarkdownV2",
         "reply_markup": {
@@ -322,21 +372,23 @@ def telegram_endpoint():
 def backend_endpoint():
     global backend_variable
     msg = request.get_json()
+    logging.info(f"receiving message from backend: {msg}")
     backend_request = JoinRequest.from_dict(msg)
     if backend_request.secret_token != get_backend_secret_token():
         logging.error(f"Unauthorized! Tried to access with token {backend_request.secret_token}'")
         return Response(status=403)
     user_to_send_to = User.get_user_by_id(backend_request.trip_admin_id)
-    sender = User.get_user_by_id(backend_request.id_of_person_asking_to_join)
+    sender = User.get_user_by_id(backend_request.tg_id_of_person_asking_to_join)
 
     message_id = \
         tg_send_join_request(user_to_send_to.user_id, sender.username,
-                             f"{backend_request.trip_id}_{backend_request.id_of_person_asking_to_join}",
-                             user_to_send_to.get_language_index())
+                             f"{backend_request.trip_id}_{backend_request.tg_id_of_person_asking_to_join}_{backend_request.id_of_person_asking_to_join}",
+                             user_to_send_to.get_language_index(), backend_request.trip_name)
 
     user_to_send_to.pending_trip_requests.append(
         {"trip_id": backend_request.trip_id,
-         "sender_id": backend_request.id_of_person_asking_to_join,
+         "sender_id": backend_request.tg_id_of_person_asking_to_join,
+         'raw_trip_desc': backend_request.trip_name,
          "message_id": message_id})
     user_to_send_to.write_back()
 
