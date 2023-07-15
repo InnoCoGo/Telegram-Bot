@@ -3,9 +3,11 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import requests
+from dateutil import tz
 from dotenv import load_dotenv
 from flask import Flask
 from flask import Response
@@ -19,7 +21,8 @@ messages = [
         'accepted': "accepted you for the trip",
         'reject': "Reject",
         'accept': "Accept",
-        'in_message_at': "at"
+        'in_message_at': "at",
+        'in_MSK': "(MSK)"
     },
     # Russian
     {
@@ -28,7 +31,8 @@ messages = [
         'accepted': "приняли вас в поездку",
         'reject': "Отказать",
         'accept': "Принять",
-        'in_message_at': "в"
+        'in_message_at': "в",
+        'in_MSK': "(МСК)"
     }
 ]
 
@@ -136,6 +140,26 @@ class JoinRequest:
         return JoinRequest.from_dict(json_obj)
 
 
+def find_and_replace_iso_datetimes_at_the_end_of_line(some_line: str):
+    # Works for a thousand years (literally)
+    # Get the beginning of ISO string starting with the year, 2***-**-**T**:**:**.**Z
+    datetime_start_index = some_line.index('2')
+    datetime_original = some_line[datetime_start_index:]
+
+    dt = datetime.strptime(datetime_original, '%Y-%m-%dT%H:%M:%S.%f%z')
+
+    # change timezone to Moscow Standard Time:
+    dt = dt.astimezone(tz.gettz('Moscow Standard Time'))
+    # datetime.datetime(2020, 5, 23, 12, 5, 11, 418279, tzinfo=tzfile('Asia/Calcutta'))
+
+    # note for Python 3.9+:
+    # use zoneinfo from the standard lib to get timezone objects
+
+    # now format to string with desired format
+    s_out = dt.strftime('%Y-%m-%d %I:%M %p')
+    return some_line.replace(datetime_original, s_out)
+
+
 def get_translated_trip_name(trip_name: str, langauge_index: int):
     localized_trip_name = trip_name
     localized_destinations = destinations[langauge_index]
@@ -143,8 +167,9 @@ def get_translated_trip_name(trip_name: str, langauge_index: int):
     num2 = trip_name[5]
     localized_trip_name = localized_trip_name.replace(num1, localized_destinations[num1], 1) \
         .replace(num2, localized_destinations[num2], 1)
-    return localized_trip_name.replace('at:', messages[langauge_index]['in_message_at'])\
-        .replace('-', '\\-').replace('>', '\\>').replace('.', '\\.')
+    return (find_and_replace_iso_datetimes_at_the_end_of_line(localized_trip_name) + " " + messages[langauge_index]['in_MSK'])\
+        .replace('at:', messages[langauge_index]['in_message_at']) \
+        .replace('-', '\\-').replace('>', '\\>').replace('.', '\\.').replace('(', '\\(').replace(')', '\\)')
 
 
 app: Flask = Flask(__name__)
@@ -258,8 +283,9 @@ def handle_tg_update(update):
         internal_id_of_person_asking_to_join = int(answer_parts[3])
 
         matching_pending_request_index: int | None = None
-        for i, request in enumerate(answering_user.pending_trip_requests, 0):
-            if (request['trip_id'] == trip_id) and (request['sender_id'] == id_of_person_asking_to_join):
+        for i, pending_request in enumerate(answering_user.pending_trip_requests, 0):
+            if (pending_request['trip_id'] == trip_id) and (
+                    pending_request['sender_id'] == id_of_person_asking_to_join):
                 matching_pending_request_index = i
                 break
 
@@ -308,7 +334,7 @@ def tg_send_join_request(chat_id, asker_username, data_to_imbue, language_index,
     url = f'https://api.telegram.org/bot{get_tg_token()}/sendMessage'
     payload = {
         'chat_id': chat_id,
-        'text': f"[@{asker_username}](https://t.me/{asker_username}) {messages[language_index]['trip_ask']} {get_translated_trip_name(trip_desc,language_index)}",
+        'text': f"[@{asker_username}](https://t.me/{asker_username}) {messages[language_index]['trip_ask']} {get_translated_trip_name(trip_desc, language_index)}",
         # TODO: info about trip
         "parse_mode": "MarkdownV2",
         "reply_markup": {
@@ -379,6 +405,18 @@ def backend_endpoint():
         return Response(status=403)
     user_to_send_to = User.get_user_by_id(backend_request.trip_admin_id)
     sender = User.get_user_by_id(backend_request.tg_id_of_person_asking_to_join)
+
+    matching_pending_request_index: int | None = None
+    for i, pending_request in enumerate(user_to_send_to.pending_trip_requests, 0):
+        if (pending_request['trip_id'] == backend_request.trip_id) and (
+                pending_request['sender_id'] == backend_request.tg_id_of_person_asking_to_join):
+            matching_pending_request_index = i
+            break
+
+    if matching_pending_request_index is not None:
+        logging.error(
+            f"Matching request already found! tripId {backend_request.trip_id}, sender_id {backend_request.tg_id_of_person_asking_to_join}, tripAdminId {backend_request.trip_admin_id}")
+        return Response('ok', status=200)
 
     message_id = \
         tg_send_join_request(user_to_send_to.user_id, sender.username,
