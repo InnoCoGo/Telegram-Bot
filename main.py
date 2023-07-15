@@ -167,7 +167,7 @@ def get_translated_trip_name(trip_name: str, langauge_index: int):
     num2 = trip_name[5]
     localized_trip_name = localized_trip_name.replace(num1, localized_destinations[num1], 1) \
         .replace(num2, localized_destinations[num2], 1)
-    return (find_and_replace_iso_datetimes_at_the_end_of_line(localized_trip_name) + " " + messages[langauge_index]['in_MSK'])\
+    return (localized_trip_name + " " + messages[langauge_index]['in_MSK'])\
         .replace('at:', messages[langauge_index]['in_message_at']) \
         .replace('-', '\\-').replace('>', '\\>').replace('.', '\\.').replace('(', '\\(').replace(')', '\\)')
 
