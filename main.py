@@ -8,10 +8,40 @@ from typing import Any
 
 import requests
 from dateutil import tz
+from dateutil import parser
 from dotenv import load_dotenv
 from flask import Flask
 from flask import Response
 from flask import request
+
+import re
+
+def escape_markdown(text: str, version: int = 2, entity_type: str = None) -> str:
+    """
+    Helper function to escape telegram markup symbols.
+
+    Args:
+        text (:obj:`str`): The text.
+        version (:obj:`int` | :obj:`str`): Use to specify the version of telegrams Markdown.
+            Either ``1`` or ``2``. Defaults to ``1``.
+        entity_type (:obj:`str`, optional): For the entity types ``PRE``, ``CODE`` and the link
+            part of ``TEXT_LINKS``, only certain characters need to be escaped in ``MarkdownV2``.
+            See the official API documentation for details. Only valid in combination with
+            ``version=2``, will be ignored else.
+    """
+    if int(version) == 1:
+        escape_chars = r'_*`['
+    elif int(version) == 2:
+        if entity_type in ['pre', 'code']:
+            escape_chars = r'\`'
+        elif entity_type == 'text_link':
+            escape_chars = r'\)'
+        else:
+            escape_chars = r'_*[]()~`>#+-=|{}.!'
+    else:
+        raise ValueError('Markdown version must be either 1 or 2!')
+
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 messages = [
     # English
@@ -146,7 +176,7 @@ def find_and_replace_iso_datetimes_at_the_end_of_line(some_line: str):
     datetime_start_index = some_line.index('2')
     datetime_original = some_line[datetime_start_index:]
 
-    dt = datetime.strptime(datetime_original, '%Y-%m-%dT%H:%M:%S.%f%z')
+    dt = parser.isoparse(datetime_original)
 
     # change timezone to Moscow Standard Time:
     dt = dt.astimezone(tz.gettz('Moscow Standard Time'))
@@ -167,9 +197,8 @@ def get_translated_trip_name(trip_name: str, langauge_index: int):
     num2 = trip_name[5]
     localized_trip_name = localized_trip_name.replace(num1, localized_destinations[num1], 1) \
         .replace(num2, localized_destinations[num2], 1)
-    return (localized_trip_name + " " + messages[langauge_index]['in_MSK'])\
-        .replace('at:', messages[langauge_index]['in_message_at']) \
-        .replace('-', '\\-').replace('>', '\\>').replace('.', '\\.').replace('(', '\\(').replace(')', '\\)')
+    return (find_and_replace_iso_datetimes_at_the_end_of_line(localized_trip_name) + " " + messages[langauge_index]['in_MSK'])\
+        .replace('at:', messages[langauge_index]['in_message_at'])
 
 
 app: Flask = Flask(__name__)
@@ -259,15 +288,15 @@ def actualize_and_get_user(update: TelegramUpdate) -> User:
 def create_accepted_message(user_receiving_message: User, user_who_accepted: User, trip_desc: str):
     language_index = user_receiving_message.get_language_index()
     # TODO: get info about trip from backend?
-    return f"[@{user_who_accepted.username}](https://t.me/{user_who_accepted.username}) " + \
-        messages[language_index]['accepted'] + " " + get_translated_trip_name(trip_desc, language_index)
+    return f"[@{escape_markdown(user_who_accepted.username)}](https://t.me/{user_who_accepted.username}) " + \
+        escape_markdown(messages[language_index]['accepted'] + " " + get_translated_trip_name(trip_desc, language_index))
 
 
 def create_rejected_message(user_receiving_message: User, user_who_accepted: User, trip_desc: str):
     language_index = user_receiving_message.get_language_index()
     # TODO: get info about trip from backend?
-    return f"[@{user_who_accepted.username}](https://t.me/{user_who_accepted.username}) " + \
-        messages[language_index]['rejected'] + " " + get_translated_trip_name(trip_desc, language_index)
+    return f"[@{escape_markdown(user_who_accepted.username)}](https://t.me/{user_who_accepted.username}) " + \
+        escape_markdown(messages[language_index]['rejected'] + " " + get_translated_trip_name(trip_desc, language_index))
 
 
 def handle_tg_update(update):
@@ -334,7 +363,7 @@ def tg_send_join_request(chat_id, asker_username, data_to_imbue, language_index,
     url = f'https://api.telegram.org/bot{get_tg_token()}/sendMessage'
     payload = {
         'chat_id': chat_id,
-        'text': f"[@{asker_username}](https://t.me/{asker_username}) {messages[language_index]['trip_ask']} {get_translated_trip_name(trip_desc, language_index)}",
+        'text': f"[@{escape_markdown(asker_username)}](https://t.me/{asker_username}) {escape_markdown(messages[language_index]['trip_ask'])} {escape_markdown(get_translated_trip_name(trip_desc, language_index))}",
         # TODO: info about trip
         "parse_mode": "MarkdownV2",
         "reply_markup": {
