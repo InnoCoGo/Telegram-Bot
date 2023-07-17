@@ -4,6 +4,10 @@ FROM --platform=$BUILDPLATFORM python:3.11-alpine AS builder
 WORKDIR /app
 
 COPY requirements.txt /app
+
+RUN apk update
+RUN apk add python3-dev py3-pip
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install -r requirements.txt
 
