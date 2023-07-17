@@ -71,13 +71,15 @@ destinations = [
     {
         "0": "Innopolis",
         "1": "Kazan",
-        "2": "Verkhniy Uslon"
+        "2": "Verkhniy Uslon",
+        "3": "Airport"
     },
     # Russian
     {
         "0": "Иннополис",
         "1": "Казань",
-        "2": "Верхний Услон"
+        "2": "Верхний Услон",
+        "3": "Аэропорт"
     }
 ]
 
